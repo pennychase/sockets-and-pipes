@@ -1,0 +1,1 @@
+My repository for Joy of Haskell's _Sockets and Pipes_
