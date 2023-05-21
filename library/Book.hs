@@ -2,10 +2,13 @@ module Book where
 
 import Control.Exception.Safe (tryAny)
 import Control.Monad.Trans.Resource (ReleaseKey, ResourceT, allocate, runResourceT)
+import qualified Data.Char as Char
 import Relude
 import qualified System.Directory as Dir
 import System.FilePath ((</>))
 import qualified System.IO as IO
+import qualified Data.Text as T
+import qualified Data.Text.IO as T
 
 -- Creates (if doesn't exist) and returns the FilePath of the directory where data files will be stored
 -- Uses the XDG Base Directory Specification
@@ -95,6 +98,35 @@ fileResourceMaybe = do
         Left e -> do
             print (displayException e)
             return Nothing
+
+
+-- Writing Text to stdout
+helloText = T.hPutStrLn stdout (T.pack "hello world")
+
+-- Writing Text to a file
+helloTextFile = runResourceT @IO do
+    dir <- liftIO getDataDir 
+    (_, h) <- fileResource (dir </> "greeting.txt") WriteMode
+    liftIO do
+        T.hPutStrLn h (T.pack "hello")
+        T.hPutStrLn h (T.pack "world")
+
+-- Reading from a file in chunks, convert to upper case, and write to stdout
+printFileContentsUpperCase = runResourceT @IO do
+    dir <- liftIO getDataDir
+    (_, h) <- fileResource (dir </> "greeting.txt") ReadMode
+    liftIO (printCapitalizedText h)
+
+printCapitalizedText h = proceed
+    where
+        proceed = do
+            chunk <- T.hGetChunk h
+            case T.null chunk of
+                True -> return ()
+                False -> do
+                    T.putStr $ T.toUpper chunk
+                    proceed
+
 
 
 
