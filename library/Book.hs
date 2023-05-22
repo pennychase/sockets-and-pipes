@@ -52,7 +52,7 @@ writeGreetingSafe = runResourceT @IO do
 -- Chapter 1 Exercises
 --
 
--- Exercise 1.1 - File resource function
+-- Exercise 1 - File resource function
 
 fileResource :: FilePath -> IOMode -> ResourceT IO (ReleaseKey, Handle)
 fileResource path mode = do
@@ -64,7 +64,7 @@ writeGreetingSafe' = runResourceT @IO do
     liftIO (IO.hPutStrLn h "hello")
     liftIO (IO.hPutStrLn h "world")
 
--- Exercise 1.2 - Showing handles
+-- Exercise 2 - Showing handles
 
 handlePrintTest :: IO ()
 handlePrintTest = do
@@ -73,7 +73,7 @@ handlePrintTest = do
     putStrLn $ show h
     IO.hShow h >>= putStrLn
 
--- Exercise 1.3 - Exhaustion
+-- Exercise 3 - Exhaustion
 
 howManyHandles = runResourceT @IO do
     hs <- openManyHandles 
@@ -117,7 +117,8 @@ printFileContentsUpperCase = runResourceT @IO do
     (_, h) <- fileResource (dir </> "greeting.txt") ReadMode
     liftIO (printCapitalizedText h)
 
-printCapitalizedText h = proceed
+-- Original version
+printCapitalizedText h = do proceed
     where
         proceed = do
             chunk <- T.hGetChunk h
@@ -127,6 +128,105 @@ printCapitalizedText h = proceed
                     T.putStr $ T.toUpper chunk
                     proceed
 
+repeatUntilIO ::
+    IO chunk                -- ^ Producer of chunks
+    -> (chunk -> Bool)      -- ^ Does chunk indicate end of file?
+    -> (chunk -> IO ())     -- ^ What to do with each chunk
+    -> IO ()
+repeatUntilIO getChunk isEnd f = proceed
+    where
+        proceed = do
+            chunk <- getChunk
+            case isEnd chunk of
+                True -> return ()
+                False -> do { f chunk; proceed }
 
+-- Rewrite printFileContentsUpperCase to use repeatUntilIO
+printFileContentsUpperCase2 = runResourceT @IO do
+    dir <- liftIO getDataDir
+    (_, h) <- fileResource (dir </> "greeting.txt") ReadMode
+    liftIO $ repeatUntilIO (T.hGetChunk h) T.null (T.putStr . T.toUpper)
 
+--
+-- Chapter 2 Exercises
+--
 
+-- Exercise 4 - Find the numbers
+digitsOnly :: Text -> Text
+digitsOnly = T.filter Char.isDigit 
+
+-- Exercise 5 - Capitalize the last
+capitalizeLast :: Text -> Text
+capitalizeLast txt =
+    case T.unsnoc txt of
+        Nothing -> txt
+        Just (initTxt, c) -> T.snoc initTxt (Char.toUpper c)
+
+-- Exercise 6 - Paren removal
+-- Assuming that there are 0 or more layers of balanced parentheses surrounding other characters
+-- E.g., "(((cat)))" or "(cat)" or "cat"
+unParen :: Text -> Text
+unParen txt =
+    case T.uncons txt of
+        Nothing -> txt
+        Just (c, rest) -> 
+            if c == '('
+                then T.init rest
+                else txt
+
+-- Exercise 7 - Character count
+characterCount :: FilePath -> IO Int
+characterCount fp = do
+    dir <- getDataDir
+    x <- readChunks (dir </> fp)
+    return $ T.length x
+
+readChunks :: FilePath -> IO Text
+readChunks fp = runResourceT @IO do 
+    (_, handle) <- fileResource fp ReadMode
+    liftIO $ go handle (T.pack "")
+    where 
+        go h chunks = do 
+            chunk <- T.hGetChunk h
+            case T.null chunk of
+                True -> return chunks
+                False -> go h (T.append chunk chunks)
+
+-- Exercise 8 - Beyond IO
+repeatUntil :: Monad m => m chunk -> (chunk -> Bool) -> (chunk -> m ()) -> m ()
+repeatUntil getChunk isEnd f = proceed
+    where
+        proceed = do
+            chunk <- getChunk 
+            case isEnd chunk of
+                True -> return ()
+                False -> do { f chunk; proceed }
+
+printFileContentsUpperCase3 = runResourceT @IO do
+    dir <- liftIO getDataDir
+    (_, h) <- fileResource (dir </> "greeting.txt") ReadMode
+    liftIO $ repeatUntil (T.hGetChunk h) T.null (T.putStr . T.toUpper)
+
+-- Exercise 9 - When and unless
+repeatUntil2 :: Monad m => m chunk -> (chunk -> Bool) -> (chunk -> m ()) -> m ()
+repeatUntil2 getChunk isEnd f = proceed
+    where
+        proceed = do
+            chunk <- getChunk 
+            unless (isEnd chunk) (f' chunk)
+        f' c = do 
+            f c
+            proceed
+
+printFileContentsUpperCase4 = runResourceT @IO do
+    dir <- liftIO getDataDir
+    (_, h) <- fileResource (dir </> "greeting.txt") ReadMode
+    liftIO $ repeatUntil2 (T.hGetChunk h) T.null (T.putStr . T.toUpper)
+
+myUnless :: Applicative f => Bool -> f () -> f ()
+myUnless b f =
+    if not b then f else pure ()
+
+myWhen :: Applicative f => Bool -> f () -> f ()
+myWhen b f =
+    if b then f else pure ()
