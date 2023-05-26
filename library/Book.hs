@@ -2,13 +2,19 @@ module Book where
 
 import Control.Exception.Safe (tryAny)
 import Control.Monad.Trans.Resource (ReleaseKey, ResourceT, allocate, runResourceT)
+import qualified Data.ByteString as BS
 import qualified Data.Char as Char
+import qualified Data.Text as T
+import qualified Data.Text.IO as T
+import qualified Data.Text.Encoding as T
 import Relude
 import qualified System.Directory as Dir
 import System.FilePath ((</>))
 import qualified System.IO as IO
-import qualified Data.Text as T
-import qualified Data.Text.IO as T
+
+--
+-- Chapter 1
+--
 
 -- Creates (if doesn't exist) and returns the FilePath of the directory where data files will be stored
 -- Uses the XDG Base Directory Specification
@@ -47,10 +53,6 @@ writeGreetingSafe = runResourceT @IO do
     (_releaseKey, h) <- allocate (IO.openFile (dir </> "greeting.txt") WriteMode) IO.hClose
     liftIO (IO.hPutStrLn h "hello")
     liftIO (IO.hPutStrLn h "world")
-
---
--- Chapter 1 Exercises
---
 
 -- Exercise 1 - File resource function
 
@@ -99,6 +101,9 @@ fileResourceMaybe = do
             print (displayException e)
             return Nothing
 
+--
+-- Chapter 2
+--
 
 -- Writing Text to stdout
 helloText = T.hPutStrLn stdout (T.pack "hello world")
@@ -146,10 +151,6 @@ printFileContentsUpperCase2 = runResourceT @IO do
     dir <- liftIO getDataDir
     (_, h) <- fileResource (dir </> "greeting.txt") ReadMode
     liftIO $ repeatUntilIO (T.hGetChunk h) T.null (T.putStr . T.toUpper)
-
---
--- Chapter 2 Exercises
---
 
 -- Exercise 4 - Find the numbers
 digitsOnly :: Text -> Text
@@ -213,10 +214,7 @@ repeatUntil2 getChunk isEnd f = proceed
     where
         proceed = do
             chunk <- getChunk 
-            unless (isEnd chunk) (f' chunk)
-        f' c = do 
-            f c
-            proceed
+            unless (isEnd chunk) (f chunk >> proceed)
 
 printFileContentsUpperCase4 = runResourceT @IO do
     dir <- liftIO getDataDir
@@ -230,3 +228,33 @@ myUnless b f =
 myWhen :: Applicative f => Bool -> f () -> f ()
 myWhen b f =
     if b then f else pure ()
+
+--
+-- Chapter 3
+--
+
+copyGreetingFile = runResourceT @IO do
+    dir <- liftIO getDataDir
+    (_, h1) <- binaryFileResource (dir </> "greeting.txt") ReadMode
+    (_, h2) <- binaryFileResource (dir </> "greeting2.txt") WriteMode
+    liftIO $ repeatUntil (BS.hGetSome h1 1024) BS.null \chunk -> BS.hPutStr h2 chunk
+
+binaryFileResource :: FilePath -> IOMode -> ResourceT IO (ReleaseKey, Handle)
+binaryFileResource path mode = allocate (IO.openBinaryFile path mode) IO.hClose
+
+exampleBytes = [104, 101, 108, 108, 111] :: [Word8]
+
+helloByteString = do
+    IO.hSetBinaryMode stdout True
+    BS.hPut stdout (BS.pack helloBytes)
+
+helloBytes = [
+    104, 101, 108, 108, 111,        -- hello
+    32,                             -- ' '
+    119, 111, 114, 108, 100, 33,    -- world!
+    10 ]                            -- \n
+
+helloUtf8 = do
+    IO.hSetBinaryMode stdout True
+    BS.hPutStr stdout (T.encodeUtf8 (T.pack "hello world!\n"))
+
