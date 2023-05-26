@@ -258,3 +258,26 @@ helloUtf8 = do
     IO.hSetBinaryMode stdout True
     BS.hPutStr stdout (T.encodeUtf8 (T.pack "hello world!\n"))
 
+
+-- Exercise 10 - A character encoding bug
+greet :: ByteString -> IO ()
+greet nameBS = case T.decodeUtf8' nameBS of
+    Left _ -> putStrLn "Invalid byte string"
+    Right nameText -> T.putStrLn (T.pack "Hello, " <> nameText)
+
+-- See https://en.wikipedia.org/wiki/UTF-8 for UTF8 encoding
+-- 255 (1111111) is not a valid encoding since there must be a 0 in one of the upper 5 bits
+-- (0 in 2 marks continuation, the other postions tell how many bytes the character is)
+-- greet $ BS.pack [0xae]
+
+-- Exercise 11 - Byte manipulation
+asciiUpper :: ByteString -> ByteString
+asciiUpper = BS.map upper
+    where
+        upper byte = 
+            if byte >= 97 && byte <= 122
+                then byte - 32
+                else byte
+
+-- example: asciiUpper $ T.encodeUtf8 (T.pack "Emmy Noether123")
+
