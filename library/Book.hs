@@ -71,12 +71,14 @@ writeGreetingSafe' = runResourceT @IO do
 
 -- Exercise 2 - Showing handles
 
-handlePrintTest :: IO ()
-handlePrintTest = do
-    dir <- getDataDir
-    h <- IO.openFile (dir </> "greeting.txt") ReadMode
-    putStrLn $ show h
-    IO.hShow h >>= putStrLn
+handlePrintTest = runResourceT @IO do
+    dir <- liftIO getDataDir
+    (_, fh1) <- fileResource (dir </> "greeting.txt") ReadMode
+    (_, fh2) <- fileResource (dir </> "greeting2.txt") WriteMode
+    liftIO $ for_ [stdin, stdout, stderr, fh1, fh2] \h -> do
+        IO.putStrLn $ show h 
+        IO.hShow h >>= IO.putStrLn
+        IO.putStrLn ""
 
 -- Exercise 3 - Exhaustion
 
@@ -321,15 +323,9 @@ makeFriendAddrInfo addressInfo = runResourceT @IO do
 -- Exercise 12 - Improper ResourceT allocation
 openAndConnect :: S.AddrInfo -> ResourceT IO (ReleaseKey, Socket)
 openAndConnect addressInfo = do
-    result <- tryAny $ allocate setup S.close
-    case result of
-        Right x -> return x
-        Left e -> fail (displayException e)
-    where 
-        setup = do
-            s <- S.openSocket addressInfo
-            S.connect s (S.addrAddress addressInfo)
-            return s
+    (releaseKey, s) <- allocate (S.openSocket addressInfo) S.close
+    liftIO $ S.connect s (S.addrAddress addressInfo)
+    return (releaseKey, s)
 
 makeFriendOpenAndConnect :: S.AddrInfo -> IO ()
 makeFriendOpenAndConnect addressInfo = runResourceT @IO do
