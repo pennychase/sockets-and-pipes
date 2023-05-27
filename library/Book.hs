@@ -7,6 +7,9 @@ import qualified Data.Char as Char
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import qualified Data.Text.Encoding as T
+import Network.Socket (Socket)
+import qualified Network.Socket as S
+import qualified Network.Socket.ByteString as S
 import Relude
 import qualified System.Directory as Dir
 import System.FilePath ((</>))
@@ -280,4 +283,89 @@ asciiUpper = BS.map upper
                 else byte
 
 -- example: asciiUpper $ T.encodeUtf8 (T.pack "Emmy Noether123")
+
+--
+-- Chapter 4
+--
+
+makeFriendSafely :: S.SockAddr -> IO ()
+makeFriendSafely address = runResourceT @IO do
+    (_, s) <- allocate (S.socket S.AF_INET S.Stream S.defaultProtocol) S.close
+    liftIO do 
+        -- S.setSocketOption s S.UserTimeout 1000   -- not supported on MacOS
+        S.connect s address
+        S.sendAll s $ T.encodeUtf8 $ T.pack "Hello, will you be my friend?"
+        repeatUntil (S.recv s 1024) BS.null BS.putStr
+        S.gracefulClose s 1000
+
+findHaskellWebsite :: IO S.AddrInfo
+findHaskellWebsite = do
+    addrInfos <- S.getAddrInfo
+        (Just S.defaultHints { S.addrSocketType = S.Stream })
+        (Just "www.haskell.org")
+        (Just "http")
+    case addrInfos of
+        [] -> fail "getAddrInfo returned []"
+        x : _ -> return x
+
+makeFriendAddrInfo :: S.AddrInfo -> IO ()
+makeFriendAddrInfo addressInfo = runResourceT @IO do
+    (_, s) <- allocate (S.openSocket addressInfo) S.close
+    liftIO do
+        -- S.setSocketOption s S.UserTimeout 1000
+        S.connect s (S.addrAddress addressInfo)
+        S.sendAll s $ T.encodeUtf8 $ T.pack "Hello, will you be my friend?"
+        repeatUntil (S.recv s 1024) BS.null BS.putStr
+        S.gracefulClose s 1000
+
+-- Exercise 12 - Improper ResourceT allocation
+openAndConnect :: S.AddrInfo -> ResourceT IO (ReleaseKey, Socket)
+openAndConnect addressInfo = do
+    result <- tryAny $ allocate setup S.close
+    case result of
+        Right x -> return x
+        Left e -> fail (displayException e)
+    where 
+        setup = do
+            s <- S.openSocket addressInfo
+            S.connect s (S.addrAddress addressInfo)
+            return s
+
+makeFriendOpenAndConnect :: S.AddrInfo -> IO ()
+makeFriendOpenAndConnect addressInfo = runResourceT @IO do
+    (_, s) <- openAndConnect addressInfo
+    liftIO do
+        S.sendAll s $ T.encodeUtf8 $ T.pack "Hello, will you be my friend?"
+        repeatUntil (S.recv s 1024) BS.null BS.putStr
+        S.gracefulClose s 1000
+
+-- Exercise 13 - Explore Gopherspace
+findGopherSite :: String -> IO S.AddrInfo
+findGopherSite host = do
+    addrInfos <- S.getAddrInfo
+        (Just S.defaultHints { S.addrSocketType = S.Stream })
+        (Just host)
+        (Just "gopher")
+    case addrInfos of
+        [] -> fail "getAddrInfo returned []"
+        x : _ -> return x
+
+gopherConnect :: S.AddrInfo -> IO ()
+gopherConnect addressInfo = runResourceT @IO do
+    (_, s) <- openAndConnect addressInfo
+    liftIO do
+        S.sendAll s $ T.encodeUtf8 $ T.pack ("\r\n")
+        repeatUntil (S.recv s 1024) BS.null BS.putStr
+        S.gracefulClose s 1000
+
+-- Exercise 14 - Address resolution
+resolve :: S.ServiceName -> S.HostName -> IO S.AddrInfo
+resolve service host = do
+    addrInfos <- S.getAddrInfo
+        (Just S.defaultHints { S.addrSocketType = S.Stream })
+        (Just host)
+        (Just service)
+    case addrInfos of
+        [] -> fail "getAddrInfo returned []"
+        x : _ -> return x
 
