@@ -376,7 +376,7 @@ resolve service host = do
 helloRequestString =
     line [A.string|GET /hello.txt HTTP/1.1|] <>
     line [A.string|User-Agent: curl/7.64.1|] <>
-    line [A.string|Accept-Language en, mil|] <>
+    line [A.string|Accept-Language: en, mil|] <>
     line [A.string||]
 
 helloResponseString =
@@ -406,7 +406,7 @@ repeatUntilNothing getChunkMaybe f = proceed
                 Nothing -> return ()
                 Just c -> do { f c; proceed }
 
--- Exercise 16 - Make an HTTP reuqest
+-- Exercise 16 - Make an HTTP request
 -- Defined a general makeRequest function to send a request to a server/protocol specified
 -- in the AddressInfo argument
 -- Use testHttpRequest to test this function with HTTP request to retrieve root
@@ -420,19 +420,24 @@ makeRequest addressInfo request = runResourceT @IO do
         repeatUntilNothing (Net.recv s 1024) BS.putStr
         S.gracefulClose s 1000
 
--- Exercise 17 - Test the hello server
--- In addition to testing the server with a browser (http://127.0.0.1:8000) and
--- curl -v http://127.0.0.1:8000, can use testHttpRequest "127.0.0.1" "8000"
-testHttpRequest :: S.HostName -> S.ServiceName -> IO ()
-testHttpRequest host port = do
+testHttpRequest :: S.HostName -> S.ServiceName -> ByteString -> IO ()
+testHttpRequest host port request = do
     addrInfo <- resolve port host
     makeRequest addrInfo request
-    where
-        request =
-            line [A.string|GET / HTTP/1.1|] <>
-            line [A.string|User-Agent: curl/7.64.1|] <>
-            line [A.string|Accept-Language en, mil|] <>
-            line [A.string||]
+
+haskellRequestString =
+    line [A.string|GET / HTTP/1.1|] <>
+    line [A.string|Host: haskell.org|] <>
+    line [A.string|Connection: close|] <>
+    line [A.string||]
+
+-- Exercise 17 - Test the hello server
+-- In addition to testing the server with a browser (http://127.0.0.1:8000) and
+-- curl -v http://127.0.0.1:8000, can use:
+--     testHttpRequest "127.0.0.1" "8000" helloRequestString
+
+
+
 
 
 
