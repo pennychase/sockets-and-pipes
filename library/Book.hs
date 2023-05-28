@@ -1,5 +1,7 @@
 module Book where
 
+import qualified ASCII as A
+import qualified ASCII.Char as A
 import Control.Exception.Safe (tryAny)
 import Control.Monad.Trans.Resource (ReleaseKey, ResourceT, allocate, runResourceT)
 import qualified Data.ByteString as BS
@@ -7,6 +9,8 @@ import qualified Data.Char as Char
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import qualified Data.Text.Encoding as T
+import Network.Simple.TCP (serve, HostPreference (..))
+import qualified Network.Simple.TCP as Net
 import Network.Socket (Socket)
 import qualified Network.Socket as S
 import qualified Network.Socket.ByteString as S
@@ -364,4 +368,71 @@ resolve service host = do
     case addrInfos of
         [] -> fail "getAddrInfo returned []"
         x : _ -> return x
+
+--
+-- Chapter 5
+--
+
+helloRequestString =
+    line [A.string|GET /hello.txt HTTP/1.1|] <>
+    line [A.string|User-Agent: curl/7.64.1|] <>
+    line [A.string|Accept-Language en, mil|] <>
+    line [A.string||]
+
+helloResponseString =
+    line [A.string|HTTP/1.1 200 OK|] <>
+    line [A.string|Content-Type: text/plain; charset=us-ascii|] <>
+    line [A.string|Content-Length: 6|] <>
+    line [A.string||] <>
+    [A.string|Hello!|]
+
+crlf :: [A.Char]
+crlf = [A.CarriageReturn, A.LineFeed]
+
+line :: ByteString -> ByteString
+line x = x <> A.fromCharList crlf 
+
+ourFirstServer = serve @IO HostAny "8000" \(s, a) -> do
+    putStrLn ("New connection from " <> show a)
+    Net.send s helloResponseString
+
+-- Exercise 15 - Repeat until Nothing
+repeatUntilNothing :: Monad m => m (Maybe chunk) -> (chunk -> m ()) -> m ()
+repeatUntilNothing getChunkMaybe f = proceed
+    where
+        proceed = do
+            chunk <- getChunkMaybe 
+            case  chunk of
+                Nothing -> return ()
+                Just c -> do { f c; proceed }
+
+-- Exercise 16 - Make an HTTP reuqest
+-- Defined a general makeRequest function to send a request to a server/protocol specified
+-- in the AddressInfo argument
+-- Use testHttpRequest to test this function with HTTP request to retrieve root
+-- Can Use it for the gopher: 
+--    resolve "gopher" "quux.org" >>= \ai -> makeRequest ai (T.encodeUtf8 $ T.pack ("\r\n"))
+makeRequest :: S.AddrInfo -> ByteString -> IO ()
+makeRequest addressInfo request = runResourceT @IO do
+    (_, s) <- openAndConnect addressInfo
+    liftIO do
+        Net.send s request
+        repeatUntilNothing (Net.recv s 1024) BS.putStr
+        S.gracefulClose s 1000
+
+-- Exercise 17 - Test the hello server
+-- In addition to testing the server with a browser (http://127.0.0.1:8000) and
+-- curl -v http://127.0.0.1:8000, can use testHttpRequest "127.0.0.1" "8000"
+testHttpRequest :: S.HostName -> S.ServiceName -> IO ()
+testHttpRequest host port = do
+    addrInfo <- resolve port host
+    makeRequest addrInfo request
+    where
+        request =
+            line [A.string|GET / HTTP/1.1|] <>
+            line [A.string|User-Agent: curl/7.64.1|] <>
+            line [A.string|Accept-Language en, mil|] <>
+            line [A.string||]
+
+
 
