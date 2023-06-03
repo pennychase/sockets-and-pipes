@@ -2,9 +2,11 @@ module Book where
 
 import qualified ASCII as A
 import qualified ASCII.Char as A
+import ASCII.Decimal (Digit (..))
 import Control.Exception.Safe (tryAny)
 import Control.Monad.Trans.Resource (ReleaseKey, ResourceT, allocate, runResourceT)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Char as Char
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
@@ -435,6 +437,90 @@ haskellRequestString =
 -- In addition to testing the server with a browser (http://127.0.0.1:8000) and
 -- curl -v http://127.0.0.1:8000, can use:
 --     testHttpRequest "127.0.0.1" "8000" helloRequestString
+
+
+--
+-- Chapter 6
+--
+
+-- Request
+data Request = Request RequestLine [Field] (Maybe Body)
+            deriving Show
+
+data RequestLine = RequestLine Method RequestTarget Version
+            deriving Show
+
+-- RFC 9112 enumerates 8 request methods, but says the list is not exhaustive, so instead
+-- of defining Method as an enumeration we define it as an ASCII ByteString
+data Method = Method (A.ASCII ByteString)
+            deriving Show
+
+-- Define RequestTarget as an opaque ASCII ByteString, ignoring the complexity for now
+data RequestTarget = RequestTarget (A.ASCII ByteString)
+                deriving Show
+
+-- Response
+data Response = Response StatusLine [Field] (Maybe Body)
+            deriving Show
+
+data StatusLine = StatusLine Version StatusCode (Maybe ReasonPhrase)
+            deriving Show
+
+data StatusCode = StatusCode Digit Digit Digit
+            deriving Show
+
+data ReasonPhrase = ReasonPhrase (A.ASCII ByteString)
+            deriving Show
+
+-- Common types for Requests and Responses
+data Version = Version Digit Digit
+            deriving Show
+
+data Field = Field FieldName FieldValue
+            deriving Show
+
+data FieldName = FieldName (A.ASCII ByteString)
+            deriving Show
+
+data FieldValue = FieldValue (A.ASCII ByteString)
+            deriving Show
+
+data Body = Body LByteString
+            deriving Show
+
+-- Exercise 18 - Construct some values
+
+helloRequest :: Request
+helloRequest = Request start [host, lang] Nothing
+    where
+        start = RequestLine (Method [A.string|GET|])
+                            (RequestTarget [A.string|/hello.txt|])
+                            (Version Digit1 Digit1)
+        host = Field (FieldName [A.string|Host|])
+                     (FieldValue [A.string|wwww.example.com|])
+        lang = Field (FieldName [A.string|Accept-Language|])
+                     (FieldValue [A.string|en, mi|])
+
+helloResponse :: Response
+helloResponse = Response status [contType, contLength] (Just body)
+    where
+        status = StatusLine (Version Digit1 Digit1)
+                            (StatusCode Digit2 Digit0 Digit0)
+                            (Just (ReasonPhrase [A.string|OK|]))
+        contType = Field (FieldName [A.string|Content-Type|])
+                         (FieldValue [A.string|text/plain; charset=us-ascii|])
+        contLength = Field (FieldName [A.string|Content-Length|])
+                           (FieldValue [A.string|6|])
+        body = Body [A.string|Hello!|]
+
+-- Exercise 19 - Infintie byte strings
+
+lazyStringPrefix :: String -> Int64 -> LByteString
+lazyStringPrefix start n = LBS.take n $ LBS.cycle (LBS.fromStrict (T.encodeUtf8 (T.pack start)))
+
+
+
+
 
 
 
