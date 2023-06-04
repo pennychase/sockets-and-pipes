@@ -6,11 +6,16 @@ import ASCII.Decimal (Digit (..))
 import Control.Exception.Safe (tryAny)
 import Control.Monad.Trans.Resource (ReleaseKey, ResourceT, allocate, runResourceT)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Builder as BSB
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Char as Char
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import qualified Data.Text.Encoding as T
+import qualified Data.Text.Lazy as LT
+import qualified Data.Text.Lazy.Builder as TB
+import qualified Data.Text.Lazy.IO as LT
+import qualified Data.Time as Time
 import Network.Simple.TCP (serve, HostPreference (..))
 import qualified Network.Simple.TCP as Net
 import Network.Socket (Socket)
@@ -513,17 +518,146 @@ helloResponse = Response status [contType, contLength] (Just body)
                            (FieldValue [A.string|6|])
         body = Body [A.string|Hello!|]
 
--- Exercise 19 - Infintie byte strings
+-- Exercise 19 - Infinite byte strings
 
 lazyStringPrefix :: String -> Int64 -> LByteString
 lazyStringPrefix start n = LBS.take n $ LBS.cycle (LBS.fromStrict (T.encodeUtf8 (T.pack start)))
 
 
+--
+-- Chapter 7
+--
 
+-- printHelloBuilder (T.pack "Alonzo")
+printHelloBuilder name = LT.putStrLn $ TB.toLazyText $
+    TB.fromString "Hello " <> TB.fromText name <> TB.fromString "!"
 
+time :: IO () -> IO ()
+time action = do
+    a <- Time.getCurrentTime
+    action
+    b <- Time.getCurrentTime
+    print (Time.diffUTCTime b a)
 
+concatWithStrict :: Int -> Text
+concatWithStrict numberOfTimes = fold $ replicate numberOfTimes $ T.pack "a"
 
+concatWithBuilder :: Int -> Text
+concatWithBuilder numberOfTimes = LT.toStrict $ TB.toLazyText $
+    fold $ replicate numberOfTimes $ TB.fromString "a"
 
+-- write strict text and builder text to files to ensure the entire texts that are created
+-- are evaluated (I/O that uses the result ensures evaluation)
+concatSpeedTest :: Int -> IO ()
+concatSpeedTest n = do
+    dir <- getDataDir
+    time $ T.writeFile (dir </> "strict.text") (concatWithStrict n)
 
+-- Encdoing requests and response
+-- To print it nicely in GHCI:
+--    BSB.hPutBuilder IO.stdout $ encodeResponse helloResponse
+
+{-
+HTTP message format from RFC 9112:
+
+HTTP-message =  start-line
+                *( field-line CRLF) 
+                CRLF
+                [ message-body ]
+-}
+
+-- Request
+encodeRequest :: Request -> BSB.Builder
+encodeRequest (Request requestLine fields bodyMaybe) =
+    encodeRequestLine requestLine
+    <> repeatedlyEncode (\x -> encodeField x <> encodeLineEnd) fields
+    <> encodeLineEnd
+    <> optionallyEncode encodeBody bodyMaybe
+
+{-
+Request start-line from RFC 9112:
+    request-line =  method SP request-target SP HTTP-version CRLF
+-}
+encodeRequestLine :: RequestLine -> BSB.Builder
+encodeRequestLine (RequestLine method target version) =
+    encodeMethod method <> A.fromCharList [A.Space]
+    <> encodeRequestTarget target <> A.fromCharList [A.Space]
+    <> encodeVersion version
+    <> encodeLineEnd
+
+encodeMethod :: Method -> BSB.Builder
+encodeMethod (Method x) = BSB.byteString (A.lift x)
+
+encodeRequestTarget :: RequestTarget -> BSB.Builder
+encodeRequestTarget (RequestTarget x) = BSB.byteString (A.lift x)
+
+-- Response
+encodeResponse :: Response -> BSB.Builder
+encodeResponse (Response statusLine fields bodyMaybe) =
+    encodeStatusLine statusLine
+    <> repeatedlyEncode (\x -> encodeField x <> encodeLineEnd) fields
+    <> encodeLineEnd
+    <> optionallyEncode encodeBody bodyMaybe
+
+{-
+Response status-line from RFC 9112:
+    status-line = HTTP-version SP status-code SP [ reason-phrase ] CRLF
+    status-code = 3DIGIT
+    reason-phrase = 1+ ( HTAB / SP / VCHAR)
+-}
+encodeStatusLine :: StatusLine -> BSB.Builder
+encodeStatusLine (StatusLine version code reason) = 
+    encodeVersion version <> A.fromCharList [A.Space]
+    <> encodeStatusCode code <> A.fromCharList [A.Space]
+    <> optionallyEncode encodeReasonPhrase reason
+    <> encodeLineEnd
+
+encodeStatusCode :: StatusCode -> BSB.Builder
+encodeStatusCode (StatusCode x y z) = A.fromDigitList [x, y, z]
+
+encodeReasonPhrase :: ReasonPhrase -> BSB.Builder
+encodeReasonPhrase (ReasonPhrase x) = BSB.byteString (A.lift x)
+
+-- Common
+
+encodeLineEnd :: BSB.Builder
+encodeLineEnd = A.fromCharList crlf
+
+encodeVersion :: Version -> BSB.Builder
+encodeVersion (Version x y) = 
+    [A.string|HTTP/|] <> A.fromDigitList [x] <> [A.string|.|] <> A.fromDigitList [y]
+
+repeatedlyEncode :: (a -> BSB.Builder) -> [a] -> BSB.Builder
+repeatedlyEncode = foldMap
+
+optionallyEncode :: (a -> BSB.Builder) -> Maybe a -> BSB.Builder
+optionallyEncode = foldMap
+
+-- Exercise 20 - Field encoding
+
+{-
+Field-line from RFC 9112 and components from RFC 9110:
+    field-line =    field-name ":" OWS field-value OWS
+    field-name =    1*tchar
+    field-value =   *field-content
+    field-content = field-vchar [1*( SP / HTAB / field-vchar) field-vchar ]
+    field-vchar =   VCHAR / obs-text
+    tchar =         any VCHAR except delimiters
+-}
+encodeField :: Field -> BSB.Builder
+encodeField (Field fname fvalue) =
+    encodeFieldName fname
+    <> [A.string|:|] <> A.fromCharList [A.Space]
+    <> encodeFieldValue fvalue
+
+encodeFieldName :: FieldName -> BSB.Builder
+encodeFieldName (FieldName x) = BSB.byteString (A.lift x)
+
+encodeFieldValue :: FieldValue -> BSB.Builder
+encodeFieldValue (FieldValue x) = BSB.byteString (A.lift x)
+
+-- Exercise 21 - Message body encoding
+encodeBody :: Body -> BSB.Builder
+encodeBody (Body x) = BSB.lazyByteString x
 
 
