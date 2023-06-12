@@ -554,7 +554,8 @@ concatSpeedTest n = do
     time $ T.writeFile (dir </> "strict.text") (concatWithStrict n)
 
 -- Encdoing requests and response
--- To print it nicely in GHCI:
+-- To print nicely in GHCI:
+--    BSB.hPutBuilder IO.stdout $ encodeRequest helloRequest
 --    BSB.hPutBuilder IO.stdout $ encodeResponse helloResponse
 
 {-
@@ -659,5 +660,59 @@ encodeFieldValue (FieldValue x) = BSB.byteString (A.lift x)
 -- Exercise 21 - Message body encoding
 encodeBody :: Body -> BSB.Builder
 encodeBody (Body x) = BSB.lazyByteString x
+
+--
+-- Chapter 8
+--
+
+-- To print nicely in GHCI (since this is small, ok to make LByteString strict):
+--    T.putStrLn $ (T.decodeUtf8 . LBS.toStrict . A.lift . countHelloAscii) 1
+-- if large body, import Data.Text.Lazy.Encoding:
+--    LT.putStrLn $ (LT.decodeUtf8 . A.lift  . countHelloAscii) 1
+countHelloAscii :: Natural -> A.ASCII LByteString
+countHelloAscii count = 
+    [A.string|Hello!|] <> A.fromCharList crlf <> case count of
+        0 -> [A.string|This page has never been viewed.|]
+        1 -> [A.string|This page has been viewed 1 time.|]
+        _ -> [A.string|This page has been viewed |]
+                <> A.showIntegralDecimal count
+                <> [A.string| times.|]
+
+
+-- Response building utilities
+
+-- Status Line
+
+data Status = Status StatusCode (Maybe ReasonPhrase)
+
+ok :: Status
+ok = Status (StatusCode Digit2 Digit0 Digit0) (Just (ReasonPhrase [A.string|OK|]))
+
+http_1_1 :: Version
+http_1_1 = Version Digit1 Digit1
+
+status :: Status -> StatusLine
+status (Status code phrase) = StatusLine http_1_1 code phrase
+
+-- Fields
+
+contentType = FieldName [A.string|Content-Type|]
+
+plainAscii = FieldValue [A.string|text/plain; charset=us-ascii|]
+
+contentLength = FieldName [A.string|Content-Length|]
+
+-- Turn ASCII message body into OK response
+asciiOk :: A.ASCII LByteString -> Response
+asciiOk str = Response (status ok) [typ, len] (Just body)
+    where
+        typ = Field contentType plainAscii
+        len = Field contentLength (bodyLengthValue body)
+        body = Body (A.lift str)
+
+bodyLengthValue :: Body -> FieldValue
+bodyLengthValue (Body x) = FieldValue (A.showIntegralDecimal (LBS.length x))
+
+
 
 
