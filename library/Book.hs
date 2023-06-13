@@ -383,7 +383,7 @@ resolve service host = do
 helloRequestString =
     line [A.string|GET /hello.txt HTTP/1.1|] <>
     line [A.string|User-Agent: curl/7.64.1|] <>
-    line [A.string|Accept-Language: en, mil|] <>
+    line [A.string|Accept-Language: en, mi|] <>
     line [A.string||]
 
 helloResponseString =
@@ -502,7 +502,7 @@ helloRequest = Request start [host, lang] Nothing
                             (RequestTarget [A.string|/hello.txt|])
                             (Version Digit1 Digit1)
         host = Field (FieldName [A.string|Host|])
-                     (FieldValue [A.string|wwww.example.com|])
+                     (FieldValue [A.string|www.example.com|])
         lang = Field (FieldName [A.string|Accept-Language|])
                      (FieldValue [A.string|en, mi|])
 
@@ -658,9 +658,35 @@ encodeFieldValue :: FieldValue -> BSB.Builder
 encodeFieldValue (FieldValue x) = BSB.byteString (A.lift x)
 
 -- Exercise 21 - Message body encoding
+
 encodeBody :: Body -> BSB.Builder
 encodeBody (Body x) = BSB.lazyByteString x
 
+-- Exercise 22
+
+{-
+To see the encodings:
+
+BSB.toLazyByteString (encodeResponse helloResponse)
+BSB.toLazyByteString (encodeRequest helloRequest)
+
+To test equality against hand-crafted strings from Chapter 5, we have to convert since the hand-crafted 
+strings are strict and the BSB.Builder produced by the encoders are converted to LazyByteString by
+BSB.tpLazyByteString
+
+BSB.toLazyByteString (encodeResponse helloResponse) == LBS.fromStrict helloResponseString
+>> True
+
+BSB.toLazyByteString (encodeRequest helloRequest) == LBS.fromStrict helloRequestString
+>> False
+The encoder as Host field and the hand-crafted string has User-Agent. If we create a new handcrafted string
+they will be identical
+-}
+helloRequestString' =
+    line [A.string|GET /hello.txt HTTP/1.1|] <>
+    line [A.string|Host: www.example.com|] <>
+    line [A.string|Accept-Language: en, mi|] <>
+    line [A.string||]
 --
 -- Chapter 8
 --
