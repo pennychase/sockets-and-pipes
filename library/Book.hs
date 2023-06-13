@@ -713,6 +713,33 @@ asciiOk str = Response (status ok) [typ, len] (Just body)
 bodyLengthValue :: Body -> FieldValue
 bodyLengthValue (Body x) = FieldValue (A.showIntegralDecimal (LBS.length x))
 
+-- Sending Response
 
+sendResponse :: Socket -> Response -> IO ()
+sendResponse s r = Net.sendLazy s $ BSB.toLazyByteString (encodeResponse r)
 
+-- Server (count not incremented)
 
+stuckCountingServer = serve @IO HostAny "8000" \(s, _) -> do
+    let count = 0 
+    sendResponse s (asciiOk (countHelloAscii count))
+
+-- Exercise 23
+
+{-
+In ghci start the server: stuckCountingServer
+
+In a terminal, run: curl --http1.1 --dump-header - http://localhost:8000
+-}
+
+-- Exercise 24
+
+mid :: Word8 -> Word8 -> Word8
+mid x y = div (x + y) 2
+
+{-
+For the input 210 amd 230, the sum is greater than maxBound :: Word8. So convert to Integer for the operations.
+-}
+
+mid' :: Word8 -> Word8 -> Word8
+mid' x y = fromInteger (div ((toInteger x) + (toInteger y)) 2)
