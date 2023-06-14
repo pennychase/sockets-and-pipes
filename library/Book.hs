@@ -14,6 +14,8 @@ import qualified Data.Text.IO as T
 import qualified Data.Text.Encoding as T
 import qualified Data.Text.Lazy as LT
 import qualified Data.Text.Lazy.Builder as TB
+import qualified Data.Text.Lazy.Builder.Int as TB
+import qualified Data.Text.Lazy.Encoding as LT
 import qualified Data.Text.Lazy.IO as LT
 import qualified Data.Time as Time
 import Network.Simple.TCP (serve, HostPreference (..))
@@ -662,7 +664,7 @@ encodeFieldValue (FieldValue x) = BSB.byteString (A.lift x)
 encodeBody :: Body -> BSB.Builder
 encodeBody (Body x) = BSB.lazyByteString x
 
--- Exercise 22
+-- Exercise 22 - Encoding test
 
 {-
 To see the encodings:
@@ -687,6 +689,7 @@ helloRequestString' =
     line [A.string|Host: www.example.com|] <>
     line [A.string|Accept-Language: en, mi|] <>
     line [A.string||]
+
 --
 -- Chapter 8
 --
@@ -750,7 +753,7 @@ stuckCountingServer = serve @IO HostAny "8000" \(s, _) -> do
     let count = 0 
     sendResponse s (asciiOk (countHelloAscii count))
 
--- Exercise 23
+-- Exercise 23 - Read the header
 
 {-
 In ghci start the server: stuckCountingServer
@@ -758,14 +761,57 @@ In ghci start the server: stuckCountingServer
 In a terminal, run: curl --http1.1 --dump-header - http://localhost:8000
 -}
 
--- Exercise 24
+-- Exercise 24 - Overflow
 
 mid :: Word8 -> Word8 -> Word8
 mid x y = div (x + y) 2
 
 {-
-For the input 210 amd 230, the sum is greater than maxBound :: Word8. So convert to Integer for the operations.
+For the input 210 amd 230, the sum is greater than maxBound :: Word8.
+Fix it by converting to Integer for the operations and converting back to Word*
 -}
 
 mid' :: Word8 -> Word8 -> Word8
 mid' x y = fromInteger (div ((toInteger x) + (toInteger y)) 2)
+
+--
+-- Chapter 9
+--
+
+-- FieldValue constants for Content-Type
+
+plainUtf8 :: FieldValue
+plainUtf8 = FieldValue [A.string|text/plain; charset=utf-8|]
+
+htmlUtf8 :: FieldValue
+htmlUtf8 = FieldValue [A.string|text/html; charset=utf8|]
+
+json :: FieldValue
+json = FieldValue [A.string|application/json|]
+
+countHelloText :: Natural -> LText
+countHelloText count = TB.toLazyText $
+    TB.fromString "Hello! \9835\r\n" <>
+    case count of
+        0 -> TB.fromString "This page has never been viewed"
+        1 -> TB.fromString "This page has been viewed 1 time"
+        _ -> TB.fromString "This page has been viewed " <> 
+                            TB.decimal count <> TB.fromString " times"
+
+textOk :: LText -> Response
+textOk str = Response (status ok) [typ, len] (Just body)
+    where
+        typ = Field contentType plainUtf8
+        len = Field contentLength (bodyLengthValue body)
+        body = Body (LT.encodeUtf8 str)
+
+stuckCountingServerText = serve @IO HostAny "8000" \(s, _) -> do
+    let count = 0
+    sendResponse s (textOk (countHelloText count))
+
+
+
+
+
+
+
