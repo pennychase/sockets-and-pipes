@@ -5,6 +5,10 @@ import qualified ASCII.Char as A
 import ASCII.Decimal (Digit (..))
 import Control.Exception.Safe (tryAny)
 import Control.Monad.Trans.Resource (ReleaseKey, ResourceT, allocate, runResourceT)
+import qualified Data.Aeson as J
+import qualified Data.Aeson.Key as J.Key
+import qualified Data.Aeson.KeyMap as J.KeyMap
+import Data.Aeson (ToJSON (toJSON), (.=))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as BSB
 import qualified Data.ByteString.Lazy as LBS
@@ -27,6 +31,9 @@ import Relude
 import qualified System.Directory as Dir
 import System.FilePath ((</>))
 import qualified System.IO as IO
+import Text.Blaze.Html (Html, toHtml)
+import Text.Blaze.Html.Renderer.Utf8 (renderHtml)
+import qualified Text.Blaze.Html5 as HTML
 
 --
 -- Chapter 1
@@ -809,6 +816,55 @@ stuckCountingServerText = serve @IO HostAny "8000" \(s, _) -> do
     let count = 0
     sendResponse s (textOk (countHelloText count))
 
+-- HTML
+
+countHtml :: Natural -> Html
+countHtml count = HTML.docType <> htmlDocument
+    where
+        htmlDocument = HTML.html $ documentMetadata <> documentBody
+
+        documentMetadata = HTML.head titleHtml
+        titleHtml = HTML.title (toHtml "My great web page")
+
+        documentBody = HTML.body $ greetingHtml <> HTML.hr <> hitCounterHtml
+        greetingHtml = HTML.p (toHtml "Hello! \9835")
+        hitCounterHtml = HTML.p $ case count of
+            0 -> toHtml "This page has never been viewed"
+            1 -> toHtml "This page has been viewed 1 time"
+            _ -> toHtml "This page has been viewed " <> toHtml @Natural count <> toHtml " times"
+
+-- JSON
+
+-- verbose form
+countHelloJSON1 :: Natural -> J.Value
+countHelloJSON1 count = toJSON (J.KeyMap.fromList [greetingJSON, hitsJSON])
+    where
+        greetingJSON = (J.Key.fromString "greeting", toJSON "Hello! \9835")
+
+        hitsJSON = ( J.Key.fromString "hits"
+                   , toJSON (J.KeyMap.fromList [numberJSON, messageJSON]))
+
+        numberJSON = (J.Key.fromString "count", toJSON count)
+
+        messageJSON = (J.Key.fromString "message", toJSON (countHelloText count))
+
+-- Aeson shortcuts
+countHelloJSON :: Natural -> J.Value
+countHelloJSON count = J.object [
+    fromString "greeting" .= fromString @Text "Hello! \9835",
+    fromString "hits" .= J.object [
+        fromString "counts" .= count,
+        fromString "message" .= countHelloText count ] ]
+
+-- JSON Response
+jsonOk :: J.Value -> Response
+jsonOk str = Response (status ok) [typ, len] (Just body)
+    where
+        typ = Field contentType json
+        len = Field contentLength (bodyLengthValue body)
+        body = Body (J.encode str)
+
+        
 
 
 
