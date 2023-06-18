@@ -816,6 +816,7 @@ stuckCountingServerText = serve @IO HostAny "8000" \(s, _) -> do
     let count = 0
     sendResponse s (textOk (countHelloText count))
 
+<<<<<<< HEAD
 -- HTML
 
 countHtml :: Natural -> Html
@@ -865,6 +866,8 @@ jsonOk str = Response (status ok) [typ, len] (Just body)
         body = Body (J.encode str)
 
         
+=======
+>>>>>>> origin/main
 
 
 
