@@ -681,7 +681,7 @@ BSB.toLazyByteString (encodeRequest helloRequest)
 
 To test equality against hand-crafted strings from Chapter 5, we have to convert since the hand-crafted 
 strings are strict and the BSB.Builder produced by the encoders are converted to LazyByteString by
-BSB.tpLazyByteString
+BSB.toLazyByteString
 
 BSB.toLazyByteString (encodeResponse helloResponse) == LBS.fromStrict helloResponseString
 >> True
@@ -816,11 +816,10 @@ stuckCountingServerText = serve @IO HostAny "8000" \(s, _) -> do
     let count = 0
     sendResponse s (textOk (countHelloText count))
 
-<<<<<<< HEAD
 -- HTML
 
-countHtml :: Natural -> Html
-countHtml count = HTML.docType <> htmlDocument
+countHelloHtml :: Natural -> Html
+countHelloHtml count = HTML.docType <> htmlDocument
     where
         htmlDocument = HTML.html $ documentMetadata <> documentBody
 
@@ -866,8 +865,56 @@ jsonOk str = Response (status ok) [typ, len] (Just body)
         body = Body (J.encode str)
 
         
-=======
->>>>>>> origin/main
+-- Exercise 25 - HTML in the browser
+
+htmlOk :: Html -> Response
+htmlOk str = Response (status ok) [typ, len] (Just body)
+    where
+        typ = Field contentType htmlUtf8
+        len = Field contentLength (bodyLengthValue body)
+        body = Body (renderHtml str)
+
+stuckCountingServerHtml = serve @IO HostAny "8000" \(s, _) -> do
+    let count = 0
+    sendResponse s (htmlOk (countHelloHtml count))
+
+-- Exercise 26 - Type ambiguity
+{-
+Remove type annotation in countHelloJSON. Error message says there's an ambiguous type
+and suggests adding a type annotation.
+-}
+
+--Exercise 27 - ENcoding with class
+
+class Encode a where
+    encode :: a -> BSB.Builder
+
+instance Encode Request where
+    encode = encodeRequest
+
+instance Encode Response where
+    encode = encodeResponse
+
+instance Encode Integer where
+    encode = BSB.integerDec
+
+instance Encode Int64 where
+    encode = BSB.int64Dec
+
+instance Encode Text where
+    encode = BSB.byteString . T.encodeUtf8
+
+instance Encode LText where
+    encode = BSB.lazyByteString . LT.encodeUtf8
+
+instance Encode ByteString where
+    encode = BSB.byteString 
+
+instance Encode LByteString where
+    encode = BSB.lazyByteString
+
+instance Encode BSB.Builder where
+    encode a = a
 
 
 
