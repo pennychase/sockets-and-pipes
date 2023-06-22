@@ -800,10 +800,10 @@ countHelloText :: Natural -> LText
 countHelloText count = TB.toLazyText $
     TB.fromString "Hello! \9835\r\n" <>
     case count of
-        0 -> TB.fromString "This page has never been viewed"
-        1 -> TB.fromString "This page has been viewed 1 time"
+        0 -> TB.fromString "This page has never been viewed\r\n"
+        1 -> TB.fromString "This page has been viewed 1 time\r\n"
         _ -> TB.fromString "This page has been viewed " <> 
-                            TB.decimal count <> TB.fromString " times"
+                            TB.decimal count <> TB.fromString " times\r\n"
 
 textOk :: LText -> Response
 textOk str = Response (status ok) [typ, len] (Just body)
@@ -884,7 +884,7 @@ Remove type annotation in countHelloJSON. Error message says there's an ambiguou
 and suggests adding a type annotation.
 -}
 
---Exercise 27 - ENcoding with class
+--Exercise 27 - Encoding with class
 
 class Encode a where
     encode :: a -> BSB.Builder
@@ -917,7 +917,36 @@ instance Encode BSB.Builder where
     encode a = a
 
 
+--
+-- Chapter 10
+--
 
+countingServer :: IO ()
+countingServer = do
+    hitCounter <- atomically (newTVar @Natural 0)
+    serve @IO HostAny "8000" \(s, _) -> do
+        count <- atomically (increment hitCounter)
+        sendResponse s (textOk (countHelloText count))
+
+increment :: TVar Natural -> STM Natural
+increment hitCounter = do
+    oldCount <- readTVar hitCounter
+    let newCount = oldCount + 1
+    writeTVar hitCounter newCount
+    return newCount
+
+{-
+STM Queue
+
+import qualified Control.Concurrent.STM as STM
+
+q <- STM.atomically (STM.newTQueue :: STM (TQueue Int))
+STM.atomically (STM.writeTQueue q 1) --  [1]
+STM.atomically (STM.writeTQueue q 2) -- [1,2]
+STM.atomically (STM.readTQueue q) => 1
+STM.atomically (STM.readTQueue q) => 2
+
+-}
 
 
 
