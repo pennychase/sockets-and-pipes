@@ -3,6 +3,7 @@ module Book where
 import qualified ASCII as A
 import qualified ASCII.Char as A
 import ASCII.Decimal (Digit (..))
+import qualified Control.Concurrent.Async as Async
 import Control.Exception.Safe (tryAny)
 import Control.Monad.Trans.Resource (ReleaseKey, ResourceT, allocate, runResourceT)
 import qualified Data.Aeson as J
@@ -940,13 +941,47 @@ STM Queue
 
 import qualified Control.Concurrent.STM as STM
 
-q <- STM.atomically (STM.newTQueue :: STM (TQueue Int))
+q <- STM.atomically (STM.newTQueue @(STM (STM.TQueue Int)))
 STM.atomically (STM.writeTQueue q 1) --  [1]
 STM.atomically (STM.writeTQueue q 2) -- [1,2]
 STM.atomically (STM.readTQueue q) => 1
 STM.atomically (STM.readTQueue q) => 2
+STM.atomically (STM.isEmptyTQueue) => True
 
 -}
 
+-- Exercise 28 - Interleaving
 
+incrementNotAtomic :: TVar Natural -> IO Natural
+incrementNotAtomic hitCounter = do
+    oldCount <- atomically (readTVar hitCounter)
+    let newCount = oldCount + 1
+    atomically (writeTVar hitCounter newCount)
+    return newCount 
 
+testIncrement :: (TVar Natural -> IO a) -> IO Natural
+testIncrement inc = do
+    x <- atomically (newTVar @Natural 0)
+    Async.replicateConcurrently_ 10 (replicateM 1000 (inc x))
+    atomically (readTVar x)
+
+-- Exercise 29 - Times gone by
+
+timingServer :: IO ()
+timingServer = do
+    lastTime <- atomically (newTVar @(Maybe Time.UTCTime) Nothing)
+    serve @IO HostAny "8000" \(s, _) -> do
+        now <- Time.getCurrentTime
+        diffTime <- atomically (getDiffTime lastTime now)
+        sendResponse s $ textOk $ LT.pack $
+            show (diffTime :: Maybe Time.NominalDiffTime)
+
+getDiffTime :: TVar (Maybe Time.UTCTime) -> Time.UTCTime -> STM (Maybe Time.NominalDiffTime)
+getDiffTime lastTime now = do
+    maybeOldTime <- readTVar lastTime
+    writeTVar lastTime (Just now)
+    return $ Time.diffUTCTime now <$> maybeOldTime      -- Use fmap
+    -- return $ case maybeOldTime of                    -- Use case
+    --     Nothing -> Nothing
+    --     Just oldTime -> Just $ Time.diffUTCTime now oldTime
+    
