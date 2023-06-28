@@ -3,6 +3,7 @@ module Book where
 import qualified ASCII as A
 import qualified ASCII.Char as A
 import ASCII.Decimal (Digit (..))
+import Control.Concurrent (threadDelay)
 import qualified Control.Concurrent.Async as Async
 import Control.Exception.Safe (tryAny)
 import Control.Monad.Trans.Resource (ReleaseKey, ResourceT, allocate, runResourceT)
@@ -689,7 +690,7 @@ BSB.toLazyByteString (encodeResponse helloResponse) == LBS.fromStrict helloRespo
 
 BSB.toLazyByteString (encodeRequest helloRequest) == LBS.fromStrict helloRequestString
 >> False
-The encoder as Host field and the hand-crafted string has User-Agent. If we create a new handcrafted string
+The encoder has Host field and the hand-crafted string has User-Agent. If we create a new handcrafted string
 they will be identical
 -}
 helloRequestString' =
@@ -984,4 +985,151 @@ getDiffTime lastTime now = do
     -- return $ case maybeOldTime of                    -- Use case
     --     Nothing -> Nothing
     --     Just oldTime -> Just $ Time.diffUTCTime now oldTime
+
+
+--
+-- Chapter 11
+--
+
+hContentsResponse :: Handle -> IO Response
+hContentsResponse h = do
+    fileContent <-  liftIO (LBS.hGetContents h)
+    let body = Just (Body fileContent)
+    return (Response (status ok) [] body)
+   
+fileStrict = do
+    dir <- getDataDir
+    serve @IO HostAny "8000" \(s, _) -> runResourceT @IO do
+        (_, h) <- binaryFileResource (dir </> "stream.txt") ReadMode
+        r <- liftIO (hContentsResponse h)
+        liftIO (sendResponse s r)
+
+-- Chunks
+
+data Chunk = Chunk ChunkSize ChunkData
+
+data ChunkData = ChunkData ByteString
+
+data ChunkSize = ChunkSize Natural
+
+dataChunk :: ChunkData -> Chunk
+dataChunk chunkData = Chunk (chunkDataSize chunkData) chunkData
+
+chunkDataSize :: ChunkData -> ChunkSize
+chunkDataSize (ChunkData bs) = case toIntegralSized @Int @Natural (BS.length bs) of
+    Just n -> ChunkSize n
+    Nothing -> error (T.pack "BS.length is always Natural")
+
+-- Chunk Encoding
+
+{-
+Chunk Transfer Encoding from RFC 9112 (omits chunk extensions)
+
+chunked-body    = *chunk last-chunk trailer-section CRLF
+chunk           =  chunk-size CRLF chunk-data CRLF
+chunk-size      = 1*HEXDIG
+last-chunk      = 1*("0") CRLF
+chunk-data      = 1*OCTET ; a sequence of chunk-size octets
+-}
+
+encodeChunk :: Chunk -> BSB.Builder
+encodeChunk (Chunk chunkSize chunkData) =
+    encodeChunkSize chunkSize <> encodeLineEnd <>
+    encodeChunkData chunkData <> encodeLineEnd
+
+encodeChunkSize :: ChunkSize -> BSB.Builder
+encodeChunkSize (ChunkSize x) = A.showIntegralHexadecimal A.LowerCase x
+
+encodeLastChunk :: BSB.Builder
+encodeLastChunk = encodeChunkSize (ChunkSize 0) <> encodeLineEnd
+
+encodeChunkData :: ChunkData -> BSB.Builder
+encodeChunkData (ChunkData bs) = BSB.byteString bs
+
+-- constants for Transfer-Encodinh
+
+transferEncoding = FieldName [A.string|"Transfer-Encoding"|]
+chunked = FieldValue [A.string|chunked|]
+transferEncodingChunked = Field transferEncoding chunked
+
+-- serving the file
+
+fileStreaming :: IO ()
+fileStreaming = do
+    dir <- getDataDir
+    serve @IO HostAny "8000" \(s, _) -> runResourceT @IO do
+        (_, h) <- binaryFileResource (dir </> "stream.txt") ReadMode
+        liftIO do
+            sendBSB s (encodeStatusLine (status ok))
+            sendBSB s (encodeFieldList [transferEncodingChunked])
+            repeatUntil (BS.hGetSome h 1024) BS.null \c ->
+                sendBSB s (encodeChunk (dataChunk (ChunkData c)))
+            sendBSB s encodeLastChunk
+            sendBSB s (encodeFieldList [])
+            
+sendBSB :: Socket -> BSB.Builder -> IO ()
+sendBSB s bs = Net.sendLazy s (BSB.toLazyByteString bs)
+
+encodeFieldList :: [Field] -> BSB.Builder
+encodeFieldList xs =
+    repeatedlyEncode (\x -> encodeField x <> encodeLineEnd) xs 
+
+-- Exercise 30 - Tripping at the finish line
+
+{-
+1. Include too few line breaks:
+    - in fileStreaming comment out: sendBSB s (encodeFieldList [])
+    - run curl in verbose mode: curl --http1.1 --verbose http://localhost:8000
+    - after connecting and streaming the file, curl reports:
+
+        * no chunk, no close, no size. Assume close to signal end
+        <
+        0
+        * Closing connection 0
+
+2. Include too many line breaks: 
+    - in fileStreaming add to the end: sendBSB s encodeLineEnd
+    - run curl in verbose mode: curl --http1.1 --verbose http://localhost:8000
+    - after connecting and streaming the file, curl reports:
+
+        * no chunk, no close, no size. Assume close to signal end
+        <
+        0
+
+        * Closing connection 0
+For 1, because we're missing a line break, the server closes the connection after printing the last
+chunk (chunk of size 0). For 2, because there's an extra line break, the server prints a line break 
+after the last chunk.
+-}
+
+-- Exercise 32 - Infinite response
+
+infiniteCountServer :: IO ()
+infiniteCountServer = serve @IO HostAny "8000" \(s, _) -> do
+    sendBSB s (encodeStatusLine (status ok))
+    sendBSB s (encodeFieldList [transferEncodingChunked])
+    for_ [1 ..] \n -> do 
+        sendOneOfInfinity s n
+        threadDelay 500000
+
+sendOneOfInfinity :: Socket -> Natural -> IO ()
+sendOneOfInfinity s n = 
+    sendBSB s $ encodeChunk $ dataChunk $ ChunkData $ A.showIntegralDecimal n <> A.fromCharList [A.LineFeed]
+
+infiniteTimeServer :: IO ()
+infiniteTimeServer = serve @IO HostAny "8000" \(s, _) -> do
+    sendBSB s (encodeStatusLine (status ok))
+    sendBSB s (encodeFieldList [transferEncodingChunked])
+    forever do
+        sendOneTimeOfInfinity s
+        threadDelay 500000
+
+sendOneTimeOfInfinity :: Socket -> IO ()
+sendOneTimeOfInfinity s = do
+    now <- Time.getCurrentTime
+    sendBSB s $ encodeChunk $ dataChunk $ ChunkData $ show now <> A.fromCharList [A.LineFeed]
+
+
     
+
+
