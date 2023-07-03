@@ -29,6 +29,7 @@ import qualified Network.Simple.TCP as Net
 import Network.Socket (Socket)
 import qualified Network.Socket as S
 import qualified Network.Socket.ByteString as S
+import Pipes (Producer, Consumer, Pipe, (>->), yield, await, runEffect)
 import Relude
 import qualified System.Directory as Dir
 import System.FilePath ((</>))
@@ -1104,6 +1105,7 @@ after the last chunk.
 
 -- Exercise 32 - Infinite response
 
+-- Infinite stream of numbers counting form one
 infiniteCountServer :: IO ()
 infiniteCountServer = serve @IO HostAny "8000" \(s, _) -> do
     sendBSB s (encodeStatusLine (status ok))
@@ -1116,6 +1118,7 @@ sendOneOfInfinity :: Socket -> Natural -> IO ()
 sendOneOfInfinity s n = 
     sendBSB s $ encodeChunk $ dataChunk $ ChunkData $ A.showIntegralDecimal n <> A.fromCharList [A.LineFeed]
 
+-- Infinite stream of UTCTimes
 infiniteTimeServer :: IO ()
 infiniteTimeServer = serve @IO HostAny "8000" \(s, _) -> do
     sendBSB s (encodeStatusLine (status ok))
@@ -1129,7 +1132,112 @@ sendOneTimeOfInfinity s = do
     now <- Time.getCurrentTime
     sendBSB s $ encodeChunk $ dataChunk $ ChunkData $ show now <> A.fromCharList [A.LineFeed]
 
+--
+-- Chapter 12
+--
+
+-- Producer Example
+
+demoProducer :: Producer Text IO ()
+demoProducer = do
+    yield (T.pack "one, ")
+    yield (T.pack "two, ")
+    yield (T.pack "three")
+    replicateM_ 10 do
+        liftIO (threadDelay 100000)
+        yield (T.pack ".")
+    yield (T.pack " GO!!!")
+
+putTextConsumer :: Consumer Text IO ()
+putTextConsumer =
+    forever do
+        x <- await
+        putText x
+
+-- To run the demo in GHCI:
+--     > runEffect (demoProducer >-> putTextConsumer)
+
+-- Data types for streaming response
+
+data MaxChunkSize = MaxChunkSize Int
+
+data StreamingResponse = StreamingResponse StatusLine [Field] (Maybe ChunkedBody)
+
+data ChunkedBody = ChunkedBody (Producer Chunk IO ())
+
+fileStreaming2 = do
+    dir <- getDataDir
+    serve @IO HostAny "8000" \(s, _) -> runResourceT @IO do
+        (_, h) <- binaryFileResource (dir </> "stream.txt") ReadMode
+        let r = hStreamingResponse h (MaxChunkSize 1024)
+        liftIO (sendStreamingResponse s r)
+
+hStreamingResponse :: Handle -> MaxChunkSize -> StreamingResponse
+hStreamingResponse h maxChunkSize = StreamingResponse statusLine fields (Just body)
+    where
+        statusLine = status ok
+        fields = [transferEncodingChunked]
+        body = chunkedBody (hChunks h maxChunkSize)
+
+hChunks :: Handle -> MaxChunkSize -> Producer ByteString IO ()
+hChunks h (MaxChunkSize mcs) = proceed
+    where 
+        proceed = do
+            chunk <- liftIO (BS.hGetSome h mcs)
+            case BS.null chunk of
+                True -> return ()
+                False -> do
+                    yield chunk
+                    proceed
+
+stringsToChunks :: Pipe ByteString Chunk IO ()
+stringsToChunks =
+    forever do
+        bs <- await
+        yield (dataChunk (ChunkData bs))
+
+chunkedBody :: Producer ByteString IO () -> ChunkedBody
+chunkedBody xs = ChunkedBody (xs >-> stringsToChunks)
+
+build :: Pipe BSB.Builder ByteString IO ()
+build = forever do
+    bsb <- await
+    let chunks = LBS.toChunks (BSB.toLazyByteString bsb)
+    for_ chunks \x ->
+        yield x
+
+encodeChunks :: Pipe Chunk BSB.Builder IO ()
+encodeChunks =
+    forever do
+        chunk <- await
+        yield (encodeChunk chunk)
+
+encodeStreamingResponse (StreamingResponse statusLine headers bodyMaybe) =
+    do
+        yield (encodeStatusLine statusLine)
+        yield (encodeFieldList headers)
+
+        for_ bodyMaybe \(ChunkedBody body) -> do
+            body >-> encodeChunks 
+            yield encodeLastChunk
+            yield (encodeFieldList [])      -- Trailer fields
+
+        >-> build
+
+sendStreamingResponse :: Socket -> StreamingResponse -> IO ()
+sendStreamingResponse s r = runEffect @IO (encodeStreamingResponse r >-> toSocket s)
+
+-- Exercise 32 - Into the socket
+
+toSocket :: Socket -> Consumer ByteString IO ()
+toSocket s = 
+    forever do
+        x <- await
+        liftIO $ Net.send s x
+
+
+
+
+
 
     
-
-
