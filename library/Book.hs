@@ -1235,6 +1235,70 @@ toSocket s =
         x <- await
         liftIO $ Net.send s x
 
+-- Exercise 33 - Produce until
+
+produceUntil :: IO chunk -> (chunk -> Bool) -> Producer chunk IO ()
+produceUntil getChunk isEnd = proceed
+    where
+        proceed = do
+            chunk <- liftIO getChunk
+            case isEnd chunk of
+                True -> return ()
+                False -> do
+                    yield chunk
+                    proceed
+
+hChunks' :: Handle -> MaxChunkSize -> Producer ByteString IO ()
+hChunks' h (MaxChunkSize mcs) = 
+    produceUntil (BS.hGetSome h mcs) BS.null
+
+-- To test: replace hChunks with hChunks' in hStreamingResponse
+
+-- Exercise 34 - File copying
+
+copyGreetingStream = runResourceT @IO do
+    dir <- liftIO getDataDir
+    (_, h1) <- binaryFileResource (dir </> "greeting.txt") ReadMode
+    (_, h2) <- binaryFileResource (dir </> "greeting1.txt") WriteMode
+    liftIO $ hCopy h1 h2
+
+hCopy :: Handle -> Handle -> IO ()
+hCopy source destination = runEffect @IO (producer >-> consumer)
+    where
+        producer = hChunks' source (MaxChunkSize 1024)
+        consumer = 
+            forever do
+                chunk <- await
+                liftIO $ BS.hPutStr destination chunk
+
+-- Exercise 35 - Copying to multiple destinations
+
+fileCopyMany :: FilePath -> [FilePath] -> IO ()
+fileCopyMany source destinations = runResourceT @IO do
+    (_, hSource) <- binaryFileResource source ReadMode
+    hDestinations <- forM destinations \fp -> do
+        (_, h) <- binaryFileResource fp WriteMode
+        return h
+    liftIO $ hCopyMany hSource hDestinations
+
+hCopyMany :: Handle -> [Handle] -> IO ()
+hCopyMany source destinations = runEffect @IO (producer >-> consumer)
+    where
+        producer = hChunks' source (MaxChunkSize 1024)
+        consumer = 
+            forever do
+                chunk <- await
+                forM_ destinations \dest -> (liftIO $ BS.hPutStr dest chunk)
+        
+
+demoFileCopyMany = runResourceT @IO do
+    dir <- liftIO getDataDir
+    let src = dir </> "greeting.txt"
+    let dests = map (\n -> dir </> ("greeting" <> show n <> ".txt")) [1..3]
+    liftIO $ fileCopyMany src dests
+
+    
+  
 
 
 
