@@ -11,10 +11,14 @@ import qualified Data.Aeson as J
 import qualified Data.Aeson.Key as J.Key
 import qualified Data.Aeson.KeyMap as J.KeyMap
 import Data.Aeson (ToJSON (toJSON), (.=))
+import qualified Data.Attoparsec.ByteString as P
+import qualified Data.Attoparsec.ByteString.Run as P
+import Data.Attoparsec.ByteString (Parser, (<?>))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as BSB
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Char as Char
+import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import qualified Data.Text.Encoding as T
@@ -1297,7 +1301,129 @@ demoFileCopyMany = runResourceT @IO do
     let dests = map (\n -> dir </> ("greeting" <> show n <> ".txt")) [1..3]
     liftIO $ fileCopyMany src dests
 
+ --
+ -- Chapter 13
+ --
+
+data ResourceName = ResourceName Text deriving (Eq, Ord)
+
+data ResourceMap = ResourceMap (Map ResourceName FilePath)
+
+resourceMap :: FilePath -> ResourceMap
+resourceMap dir = ResourceMap $ Map.fromList 
+    [ (streamResource, dir </> "stream.txt") ,
+      (readResource, dir </> "read.txt")]
+
+streamResource = ResourceName (T.pack "/stream")
+
+readResource = ResourceName (T.pack "/read")
+
+
+-- Attoparsec examples
+
+countString ::ByteString
+countString = [A.string|one-two-three-four|]
+
+{-
+Examples:
+
+P.parseOnly (P.takeWhile A.isDigit) countString
+> Right ""
+
+P.parseOnly (P.takeWhile A.isLetter) countString
+> Right "one"
+
+P.parseOnly (P.takeWhile1 A.isLetter) countString
+> Right "one
+
+P.parseOnly (P.takeWhile1 A.isDigit) countString
+> Left "Failed reading: takeWhile1"
+
+-}
+
+takeTwoWords :: Parser (ByteString, ByteString)
+takeTwoWords = do
+    a <- P.takeWhile A.isLetter
+    _ <- P.string (A.fromCharList [A.HyphenMinus])
+    b <- P.takeWhile A.isLetter
+    return (a, b)
+
+
+-- HTTP Request line parsing
+
+{-
+request-line from RFC 9112:
+
+request-line - method SP request-target SP HTTP-version CRLF
+
+method = token
+token = 1*tchar (tchar is letter, number, or one of ! # $ % & ' * + - . ^ _ ` | ~)
+
+HTTP-version  = HTTP-name "/" DIGIT "." DIGIT
+-}
     
+spaceParser :: Parser ByteString
+spaceParser = P.string (A.fromCharList [A.Space])
+
+lineEndParser :: Parser ByteString
+lineEndParser = P.string (A.fromCharList crlf)
+
+requestLineParser :: Parser RequestLine
+requestLineParser = do
+    method  <- methodParser
+    _       <- spaceParser
+    target  <- requestTargetParser
+    _       <- spaceParser
+    version <- versionParser
+    _       <- lineEndParser
+    return (RequestLine method target version)
+
+methodParser :: Parser Method
+methodParser = do
+    x <- tokenParser
+    return (Method x)
+
+tokenParser :: Parser (A.ASCII ByteString)
+tokenParser = do
+    bs <- P.takeWhile1 isTchar
+    case A.convertStringMaybe bs of
+        Just asciiBS -> return asciiBS
+        Nothing -> fail "Non-ASCII tchar"
+
+isTchar :: Word8 -> Bool
+isTchar c = c `elem` tcharSymbols || A.isDigit c || A.isLetter c
+
+tcharSymbols :: [Word8]
+tcharSymbols = A.fromCharList [A.ExclamationMark, A.NumberSign, A.DollarSign,
+    A.PercentSign, A.Ampersand, A.Apostrophe, A.Asterisk, A.PlusSign, A.HyphenMinus,
+    A.FullStop, A.Caret, A.Underscore, A.GraveAccent, A.VerticalLine, A.Tilde]
+
+-- RFC 9112 describes several forms that the request target can take and 
+-- references RFC 3986 for URI syntax. We'll sumplify and allow a request
+-- to be a nonempty string of visible ASCII characters (VCHAR)
+requestTargetParser :: Parser RequestTarget
+requestTargetParser = do
+    bs <- P.takeWhile1 A.isVisible
+    case A.convertStringMaybe bs of
+        Just asciiBS -> return (RequestTarget asciiBS)
+        Nothing -> fail "Non-ASCII vchar"
+
+versionParser :: Parser Version
+versionParser = do
+    _ <- P.string [A.string|HTTP|]
+    _ <- P.string (A.fromCharList [A.Slash])
+    x <- digitParser
+    _ <- P.string (A.fromCharList [A.FullStop])
+    y <- digitParser
+    return (Version x y)
+
+digitParser :: Parser Digit
+digitParser = do
+    x <- P.anyWord8
+    case A.isDigit x of
+        True -> return (A.word8ToDigitUnsafe x)
+        False -> fail "0-9 expected"
+
   
 
 
