@@ -485,17 +485,17 @@ data Response = Response StatusLine [Field] (Maybe Body)
             deriving Show
 
 data StatusLine = StatusLine Version StatusCode (Maybe ReasonPhrase)
-            deriving Show
+            deriving (Eq, Show)
 
 data StatusCode = StatusCode Digit Digit Digit
-            deriving Show
+            deriving (Eq, Show)
 
 data ReasonPhrase = ReasonPhrase (A.ASCII ByteString)
-            deriving Show
+            deriving (Eq, Show)
 
 -- Common types for Requests and Responses
 data Version = Version Digit Digit
-            deriving Show
+            deriving (Eq, Show)
 
 data Field = Field FieldName FieldValue
             deriving Show
@@ -1370,17 +1370,17 @@ lineEndParser = P.string (A.fromCharList crlf)
 
 requestLineParser :: Parser RequestLine
 requestLineParser = do
-    method  <- methodParser
-    _       <- spaceParser
-    target  <- requestTargetParser
-    _       <- spaceParser
-    version <- versionParser
-    _       <- lineEndParser
+    method  <- methodParser             <?> "Method" 
+    _       <- spaceParser              <|> fail "Method should be followed by a space"
+    target  <- requestTargetParser      <?> "Target"
+    _       <- spaceParser              <|> fail "Target should be followed by a space"
+    version <- versionParser            <?> "Version"
+    _       <- lineEndParser            <|> fail "Version should be followed by end of line"
     return (RequestLine method target version)
 
 methodParser :: Parser Method
 methodParser = do
-    x <- tokenParser
+    x <- tokenParser 
     return (Method x)
 
 tokenParser :: Parser (A.ASCII ByteString)
@@ -1408,13 +1408,15 @@ requestTargetParser = do
         Just asciiBS -> return (RequestTarget asciiBS)
         Nothing -> fail "Non-ASCII vchar"
 
+-- Exercise 38 - Better parse errors
+-- Added error context/descriptions to versionParser
 versionParser :: Parser Version
 versionParser = do
     _ <- P.string [A.string|HTTP|]
-    _ <- P.string (A.fromCharList [A.Slash])
-    x <- digitParser
-    _ <- P.string (A.fromCharList [A.FullStop])
-    y <- digitParser
+    _ <- P.string (A.fromCharList [A.Slash])        <|> fail "HTTP should be followed by a slash"
+    x <- digitParser                                <?> "First digit"
+    _ <- P.string (A.fromCharList [A.FullStop])     <|> fail "Missing '.' after first digit"
+    y <- digitParser                                <?> "Second digit"
     return (Version x y)
 
 digitParser :: Parser Digit
@@ -1424,9 +1426,141 @@ digitParser = do
         True -> return (A.word8ToDigitUnsafe x)
         False -> fail "0-9 expected"
 
+-- Parse a stream from a socket
+
+data Input = Input (P.RestorableInput IO ByteString)
+
+parseFromSocket :: Socket -> MaxChunkSize -> IO Input
+parseFromSocket s (MaxChunkSize mcs) = do
+    i <- P.newRestorableIO (S.recv s mcs)
+    return (Input i)
+
+readRequestLine (Input i) = do
+    result <- P.parseAndRestore i (requestLineParser <?> "Request line")
+    case result of
+        Left parseError -> fail (P.showParseError parseError)
+        Right requestLine -> return requestLine
+
+resourceServer :: IO ()
+resourceServer = do
+    dir <- getDataDir
+    let resources = resourceMap dir
+    let maxChunkSize = MaxChunkSize 1024
+    serve @IO HostAny "8000" \(s, _) -> serveResourceOnce resources maxChunkSize s
+
+serveResourceOnce :: ResourceMap -> MaxChunkSize  -> Socket -> IO ()
+serveResourceOnce resources maxChunkSize s = runResourceT @IO do
+    i <- liftIO $ parseFromSocket s maxChunkSize
+    RequestLine _ target _ <- liftIO (readRequestLine i)
+    filePath <- liftIO (getTargetFilePath resources target)
+    (_, h) <- binaryFileResource filePath ReadMode
+    let r = hStreamingResponse h maxChunkSize
+    liftIO (sendStreamingResponse s r)
+
+getTargetFilePath :: ResourceMap -> RequestTarget -> IO FilePath
+getTargetFilePath rs target =
+    case targetFilePathMaybe rs target of
+        Nothing -> fail "not found"
+        Just fp -> return fp
+
+targetFilePathMaybe :: ResourceMap -> RequestTarget -> Maybe FilePath
+targetFilePathMaybe (ResourceMap rs) (RequestTarget target) = 
+    Map.lookup r rs
+    where
+        r = ResourceName (A.asciiByteStringToText target)
+
+-- Exercise 36 - Parsing parentheses
+parenParser :: Parser ByteString
+parenParser = do
+    _ <- P.string (A.fromCharList [A.LeftParenthesis])
+    x <- P.takeWhile (/= A.fromChar A.RightParenthesis)
+    _ <- P.string (A.fromCharList [A.RightParenthesis])
+    return x
+
+-- Exercise 37 - To digit, maybe
+digitParser' :: Parser Digit
+digitParser' = do
+    x <- P.anyWord8
+    case A.word8ToDigitMaybe x of
+        Just asciiDigit -> return asciiDigit
+        Nothing -> fail "0-9 expected"
+
+-- Exercise 39 - Status line
+
+{-
+status-line from RFC 9112:
+
+status-line = HTTP-version SP status-code SP [ reason-phrase ]
+
+status-code = 3DIGIT
+
+reason-phrase  = 1*( HTAB / SP / VCHAR / obs-text )
+
+-}
+
+-- Parse status line
+statusLineParser :: Parser StatusLine
+statusLineParser = do
+    version     <- versionParser            <?> "Version"
+    _           <- spaceParser              <|> fail "Version should be followed by a space"
+    statusCode  <- statusCodeParser         <?> "Status Code"
+    _           <- spaceParser              <|> fail "Status Code should be followed by a space"
+    reason      <- reasonParserMaybe        <?> "Reason Phrase"
+    _           <- lineEndParser
+    return (StatusLine version statusCode reason)
+
+statusCodeParser :: Parser StatusCode
+statusCodeParser = do
+    d1 <- digitParser'
+    d2 <- digitParser'
+    d3 <- digitParser'
+    return (StatusCode d1 d2 d3)
+
+reasonParserMaybe :: Parser (Maybe ReasonPhrase)
+reasonParserMaybe = 
+    Just <$> reasonParser <|>  pure Nothing
+
+reasonParser :: Parser ReasonPhrase
+reasonParser = do
+    bs <- P.takeWhile1 isReasonChar
+    case A.convertStringMaybe bs of
+        Just asciiBS -> return (ReasonPhrase asciiBS)
+        Nothing -> fail "Non-ASCII vchar"
+
+isReasonChar :: Word8 -> Bool
+isReasonChar c = A.isVisible c || c `elem` (fmap A.fromChar [A.Space, A.HorizontalTab])
+
+-- Test parsing
+statusLineParseTest :: StatusLine -> Maybe String
+statusLineParseTest s = 
+    case result of
+        Right s' | s /= s' -> Just (show s') 
+        Right _ ->  Nothing
+        Left e -> Just e
+    where
+        encodedStatus = LBS.toStrict $ BSB.toLazyByteString $ encodeStatusLine s
+        result = P.parseOnly (statusLineParser <* P.endOfInput) encodedStatus
+
+-- Exercise 40 - P.string
+
+stringParser1 :: ByteString -> Parser ByteString
+stringParser1 bs = do
+    case BS.uncons bs of
+        Nothing -> return bs
+        Just (b, bs') -> do
+            x <- P.anyWord8
+            unless (b == x) (fail "string") 
+            res <- stringParser1 bs'
+            return $ BS.cons b res
+
+stringParser2 :: ByteString -> Parser ByteString
+stringParser2 bs = do
+    xs <- replicateM (BS.length bs) P.anyWord8
+    when (BS.pack xs /= bs) (fail "string")
+    return bs
+
+
   
-
-
 
 
 
