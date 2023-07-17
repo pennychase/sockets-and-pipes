@@ -1528,7 +1528,8 @@ reasonParser = do
         Nothing -> fail "Non-ASCII vchar"
 
 isReasonChar :: Word8 -> Bool
-isReasonChar c = A.isVisible c || c `elem` (fmap A.fromChar [A.Space, A.HorizontalTab])
+isReasonChar c = A.isVisible c |
+| c `elem` (fmap A.fromChar [A.Space, A.HorizontalTab])
 
 -- Test parsing
 statusLineParseTest :: StatusLine -> Maybe String
@@ -1560,8 +1561,33 @@ stringParser2 bs = do
     return bs
 
 
-  
+--
+-- Chapter 14
+--
 
+-- Status Codes
 
+-- 400
+badRequest = Status
+    (StatusCode Digit4 Digit0 Digit0)
+    (ReasonPhrase [A.string|Bad request|])
 
-    
+-- 404
+notFound = Status
+    (StatusCode Digit4 Digit0 Digit4)
+    (ReasonPhrase [A.string|Not found|])
+
+-- 405
+methodNotAllowed = Status
+    (StatusCode Digit4 Digit0 Digit5)
+    (ReasonPhrase [A.string|Methid not allowed|])
+
+-- 500
+serverError = Status
+    (StatusCode Digit5 Digit0 Digit0)
+    (ReasonPhrase [A.string|Server error|])
+
+-- 505
+versionNotSupported = Status
+    (StatusCode Digit5 Digit0 Digit5)
+    (ReasonPhrase [A.string|Version not supported|])
