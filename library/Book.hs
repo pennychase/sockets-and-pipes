@@ -1528,8 +1528,7 @@ reasonParser = do
         Nothing -> fail "Non-ASCII vchar"
 
 isReasonChar :: Word8 -> Bool
-isReasonChar c = A.isVisible c |
-| c `elem` (fmap A.fromChar [A.Space, A.HorizontalTab])
+isReasonChar c = A.isVisible c || c `elem` (fmap A.fromChar [A.Space, A.HorizontalTab])
 
 -- Test parsing
 statusLineParseTest :: StatusLine -> Maybe String
@@ -1570,24 +1569,122 @@ stringParser2 bs = do
 -- 400
 badRequest = Status
     (StatusCode Digit4 Digit0 Digit0)
-    (ReasonPhrase [A.string|Bad request|])
+    (Just (ReasonPhrase [A.string|Bad request|]))
 
 -- 404
 notFound = Status
     (StatusCode Digit4 Digit0 Digit4)
-    (ReasonPhrase [A.string|Not found|])
+    (Just (ReasonPhrase [A.string|Not found|]))
 
 -- 405
 methodNotAllowed = Status
     (StatusCode Digit4 Digit0 Digit5)
-    (ReasonPhrase [A.string|Methid not allowed|])
+    (Just (ReasonPhrase [A.string|Methid not allowed|]))
 
 -- 500
 serverError = Status
     (StatusCode Digit5 Digit0 Digit0)
-    (ReasonPhrase [A.string|Server error|])
+    (Just (ReasonPhrase [A.string|Server error|]))
 
 -- 505
 versionNotSupported = Status
-    (StatusCode Digit5 Digit0 Digit5)
-    (ReasonPhrase [A.string|Version not supported|])
+    (StatusCode Digit5 Digit0 Digit5) 
+    (Just (ReasonPhrase [A.string|Version not supported|]))
+
+-- Construct Error Responses
+
+textResponse :: Status -> [Field] -> LText -> Response
+textResponse s additionalFields bodyText =
+    Response (status s)
+             ([typ, len] <> additionalFields)
+             (Just (Body (LT.encodeUtf8 bodyText)))
+    where
+        typ = Field contentType plainUtf8
+        len = Field contentLength (bodyLengthValue body)
+        body = Body (LT.encodeUtf8 bodyText)
+
+
+-- Logging Errors
+
+data LogEvent = LogEvent LText
+
+printLogEvent :: LogEvent -> IO ()
+printLogEvent (LogEvent x) = LT.putStrLn x
+
+data Error = Error (Maybe Response) [LogEvent]
+
+handleRequestError :: (LogEvent -> IO b) -> Socket -> Error -> IO ()
+handleRequestError log s (Error responseMaybe events) = do
+    for_ events log
+    for_ responseMaybe (sendResponse s)
+
+-- Error Responses
+
+-- Malformed request
+requestParseError :: P.ParseError -> Error
+requestParseError parseError = Error (Just response) [event]
+    where
+        response = textResponse badRequest [] message
+        event = LogEvent message
+        message = TB.toLazyText (
+            TB.fromString "Malformed request: " <>
+            TB.fromString (P.showParseError parseError))
+
+-- Resource doesn't exist
+notFoundError :: Error
+notFoundError = Error (Just response) []
+    where
+        response = textResponse notFound [] message
+        message = LT.pack "It just isn't there."
+
+-- Method not supported
+-- RC 9110 requires an Allow field in the Response which lists the allowed methods
+-- No need to send a message body
+methodError :: [Method] -> Error
+methodError supportedMethods = Error (Just response) []
+    where
+        response = textResponse methodNotAllowed [allowField supportedMethods] LT.empty
+
+allowField :: [Method] -> Field
+allowField methods = Field (FieldName [A.string|Allow|]) value
+    where
+        value = FieldValue $ commaList $ map (\(Method m) -> m) methods
+        commaList xs = fold $ intersperse (A.fromCharList [A.Comma, A.Space]) xs
+
+-- Can't open file
+fileOpenError :: FilePath -> SomeException -> Error
+fileOpenError filePath ex = Error (Just response) [event]
+    where
+        response = textResponse serverError [] (LT.pack "Something went wrong.")
+        event = LogEvent $ TB.toLazyText $
+            TB.fromString "Failed to open file " <>
+            TB.fromString (show filePath) <> TB.fromString ": " <>
+            TB.fromString (displayException ex)
+
+-- Exceptions after status has been sent
+ungracefulError :: SomeException -> Error
+ungracefulError ex = Error Nothing [event]
+    where
+        event = LogEvent (LT.pack (displayException ex))
+
+-- Wrapper to catch any IO exception
+handleIOExceptions :: IO (Either Error a) -> IO (Either Error a)
+handleIOExceptions action = do
+    result <- tryAny action
+    case result of
+        Left e -> return (Left (ungracefulError e))
+        Right x -> return x
+
+
+
+
+
+
+
+
+
+
+
+
+
+
