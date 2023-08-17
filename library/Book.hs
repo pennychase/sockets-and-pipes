@@ -1582,7 +1582,7 @@ notFound = Status
 -- 405
 methodNotAllowed = Status
     (StatusCode Digit4 Digit0 Digit5)
-    (Just (ReasonPhrase [A.string|Methid not allowed|]))
+    (Just (ReasonPhrase [A.string|Method not allowed|]))
 
 -- 500
 serverError = Status
@@ -1724,10 +1724,15 @@ serveResourceOnceX resources maxChunkSize s =
     runExceptT @Error @(ResourceT IO) do
         i <- liftIO $ parseFromSocket s maxChunkSize
         RequestLine method target version <- ExceptT $ liftIO $ readRequestLineX i
+        ExceptT $ return (requireMethodX allowedMethods method)
+        ExceptT $ return (requireVersionX supportedVersion version)
         fp <- ExceptT $ return (getTargetFilePathX resources target)
         (_, h) <- ExceptT $ binaryFileResourceX fp ReadMode
         let r = hStreamingResponse h maxChunkSize
         ExceptT $ liftIO $ sendStreamingResponseX s r
+    where
+        allowedMethods = [ Method [A.string|GET|] ]
+        supportedVersion = http_1_1
 
 -- Exercise 41 - ResourceServerX
 
@@ -1741,4 +1746,55 @@ resourceServerX = do
             case result of
                 Left e -> handleRequestError log s e 
                 Right _ -> return ()
+
+-- Exercise 42 - Check method and version
+
+-- Method check: added requireMethodX to serveResourceOnceX
+
+-- Version check 
+-- requireVersionX added to serveResourceOnceX
+versionError :: Error
+versionError = Error (Just response) []
+    where
+        response = textResponse versionNotSupported [] message
+        message = LT.pack "Only HTTP 1.1 is supported."
+
+requireVersionX :: Version -> Version -> Either Error ()
+requireVersionX supportedVersion requestVersion =
+    case (requestVersion == supportedVersion) of
+        False -> Left versionError
+        True -> Right ()
+    
+-- Testing errors
+--
+-- Unavailable resource -> message returned to client
+--   curl --http1.1 http://localhost:8000
+-- Unable to open file (change permissions) -> log message generated
+--   chmod 0 ~/.local/share/sockets-and-pipes/read.txt
+--   curl --http1.1 http://localhost:8000/read
+-- Unsupported method -> response (in verbose output)
+--   curl --http1.1 --verbose -X POST http://localhost:8000
+-- Unsupported version
+--   Test request of version not HTTP 1.1:
+streamRequestString1 =
+    line [A.string|GET /stream HTTP/0.1|] <>
+    line [A.string|User-Agent: curl/7.64.1|] <>
+    line [A.string|Accept-Language: en, mi|] <>
+    line [A.string||]
+--  Test with: > testHttpRequest "127.0.0.1" "8000" streamRequestString1
+
+-- Exercise 43
+
+-- Malformed request -> response and log generated
+--   Test request with two spaces after method:
+streamRequestString2 =
+    line [A.string|GET  /stream HTTP/1.1|] <>
+    line [A.string|User-Agent: curl/7.64.1|] <>
+    line [A.string|Accept-Language: en, mi|] <>
+    line [A.string||]
+--  Test with: > testHttpRequest "127.0.0.1" "8000" streamRequestString2
+
+
+
+
 
