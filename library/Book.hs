@@ -41,6 +41,7 @@ import qualified System.IO as IO
 import Text.Blaze.Html (Html, toHtml)
 import Text.Blaze.Html.Renderer.Utf8 (renderHtml)
 import qualified Text.Blaze.Html5 as HTML
+import Unfork (unforkAsyncIO_)
 
 --
 -- Chapter 1
@@ -466,23 +467,23 @@ haskellRequestString =
 
 -- Request
 data Request = Request RequestLine [Field] (Maybe Body)
-            deriving Show
+            deriving (Eq, Show)
 
 data RequestLine = RequestLine Method RequestTarget Version
-            deriving Show
+            deriving (Eq, Show)
 
 -- RFC 9112 enumerates 8 request methods, but says the list is not exhaustive, so instead
 -- of defining Method as an enumeration we define it as an ASCII ByteString
 data Method = Method (A.ASCII ByteString)
-            deriving Show
+            deriving (Eq, Show)
 
 -- Define RequestTarget as an opaque ASCII ByteString, ignoring the complexity for now
 data RequestTarget = RequestTarget (A.ASCII ByteString)
-                deriving Show
+                deriving (Eq, Show)
 
 -- Response
 data Response = Response StatusLine [Field] (Maybe Body)
-            deriving Show
+            deriving (Eq, Show)
 
 data StatusLine = StatusLine Version StatusCode (Maybe ReasonPhrase)
             deriving (Eq, Show)
@@ -498,16 +499,16 @@ data Version = Version Digit Digit
             deriving (Eq, Show)
 
 data Field = Field FieldName FieldValue
-            deriving Show
+            deriving (Eq, Show)
 
 data FieldName = FieldName (A.ASCII ByteString)
-            deriving Show
+            deriving (Eq, Show)
 
 data FieldValue = FieldValue (A.ASCII ByteString)
-            deriving Show
+            deriving (Eq, Show)
 
 data Body = Body LByteString
-            deriving Show
+            deriving (Eq, Show)
 
 -- Exercise 18 - Construct some values
 
@@ -1051,7 +1052,7 @@ encodeLastChunk = encodeChunkSize (ChunkSize 0) <> encodeLineEnd
 encodeChunkData :: ChunkData -> BSB.Builder
 encodeChunkData (ChunkData bs) = BSB.byteString bs
 
--- constants for Transfer-Encodinh
+-- constants for Transfer-Encoding
 
 transferEncoding = FieldName [A.string|"Transfer-Encoding"|]
 chunked = FieldValue [A.string|chunked|]
@@ -1078,6 +1079,7 @@ sendBSB s bs = Net.sendLazy s (BSB.toLazyByteString bs)
 encodeFieldList :: [Field] -> BSB.Builder
 encodeFieldList xs =
     repeatedlyEncode (\x -> encodeField x <> encodeLineEnd) xs 
+    <> encodeLineEnd
 
 -- Exercise 30 - Tripping at the finish line
 
@@ -1305,9 +1307,9 @@ demoFileCopyMany = runResourceT @IO do
  -- Chapter 13
  --
 
-data ResourceName = ResourceName Text deriving (Eq, Ord)
+data ResourceName = ResourceName Text deriving (Eq, Ord, Show)
 
-data ResourceMap = ResourceMap (Map ResourceName FilePath)
+data ResourceMap = ResourceMap (Map ResourceName FilePath) deriving Show
 
 resourceMap :: FilePath -> ResourceMap
 resourceMap dir = ResourceMap $ Map.fromList 
@@ -1435,6 +1437,7 @@ parseFromSocket s (MaxChunkSize mcs) = do
     i <- P.newRestorableIO (S.recv s mcs)
     return (Input i)
 
+readRequestLine :: Input -> IO RequestLine
 readRequestLine (Input i) = do
     result <- P.parseAndRestore i (requestLineParser <?> "Request line")
     case result of
@@ -1676,15 +1679,66 @@ handleIOExceptions action = do
         Right x -> return x
 
 
+-- Rewritten resourceServer to allow thread-safe logging
+-- Rewritten functions will have an X suffix
 
+getTargetFilePathX :: ResourceMap -> RequestTarget -> Either Error FilePath
+getTargetFilePathX rs t =
+    case targetFilePathMaybe rs t of
+        Nothing -> Left notFoundError
+        Just fp -> Right fp
 
+readRequestPart :: Input -> String -> Parser a -> IO (Either Error a)
+readRequestPart (Input i) description p = do
+    result <- liftIO (P.parseAndRestore i (p <?> description))
+    case result of
+        Left e -> return $ Left $ requestParseError e
+        Right requestLine -> return (Right requestLine)
 
+readRequestLineX :: Input -> IO (Either Error RequestLine)
+readRequestLineX i = readRequestPart i "Request line" requestLineParser
 
+binaryFileResourceX :: FilePath -> IOMode -> ResourceT IO (Either Error (ReleaseKey, Handle))
+binaryFileResourceX fp mode = do
+    result <- tryAny (binaryFileResource fp mode)
+    case result of
+        Left e -> return (Left (fileOpenError fp e))
+        Right x -> return (Right x)
 
+requireMethodX :: [Method] -> Method -> Either Error ()
+requireMethodX supportedMethods x =
+    case (elem x supportedMethods) of
+        False -> Left (methodError supportedMethods)
+        True -> Right ()
 
+sendStreamingResponseX :: Socket -> StreamingResponse -> IO (Either Error ())
+sendStreamingResponseX s r = do
+    result <- tryAny $ runEffect @IO (encodeStreamingResponse r >-> toSocket s)
+    case result of
+        Left e -> return (Left (ungracefulError e))
+        Right x -> return (Right x)
 
+serveResourceOnceX :: ResourceMap -> MaxChunkSize -> Socket -> IO (Either Error ())
+serveResourceOnceX resources maxChunkSize s =
+    handleIOExceptions $ runResourceT @IO $
+    runExceptT @Error @(ResourceT IO) do
+        i <- liftIO $ parseFromSocket s maxChunkSize
+        RequestLine method target version <- ExceptT $ liftIO $ readRequestLineX i
+        fp <- ExceptT $ return (getTargetFilePathX resources target)
+        (_, h) <- ExceptT $ binaryFileResourceX fp ReadMode
+        let r = hStreamingResponse h maxChunkSize
+        ExceptT $ liftIO $ sendStreamingResponseX s r
 
+-- Exercise 41 - ResourceServerX
 
-
-
+resourceServerX = do
+    dir <- getDataDir
+    let resources = resourceMap dir
+    let maxChunkSize = MaxChunkSize 1024
+    unforkAsyncIO_ printLogEvent \log ->
+        serve @IO HostAny "8000" \(s, _) -> do
+            result <- serveResourceOnceX resources maxChunkSize s
+            case result of
+                Left e -> handleRequestError log s e 
+                Right _ -> return ()
 
