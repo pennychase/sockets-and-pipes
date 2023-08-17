@@ -1776,25 +1776,29 @@ requireVersionX supportedVersion requestVersion =
 --   curl --http1.1 --verbose -X POST http://localhost:8000
 -- Unsupported version
 --   Test request of version not HTTP 1.1:
-streamRequestString1 =
+badRequestString1 =
     line [A.string|GET /stream HTTP/0.1|] <>
     line [A.string|User-Agent: curl/7.64.1|] <>
     line [A.string|Accept-Language: en, mi|] <>
     line [A.string||]
---  Test with: > testHttpRequest "127.0.0.1" "8000" streamRequestString1
+--  Test with: > testHttpRequest "127.0.0.1" "8000" badRequestString1
 
--- Exercise 43
+-- Exercise 43 - A sinister request
 
--- Malformed request -> response and log generated
---   Test request with two spaces after method:
-streamRequestString2 =
-    line [A.string|GET  /stream HTTP/1.1|] <>
+sendSinisterRequest :: S.HostName -> S.ServiceName -> ByteString -> IO ()
+sendSinisterRequest host port request = runResourceT @IO do
+    addrInfo <- liftIO $ resolve port host
+    (_, s) <- openAndConnect addrInfo
+    liftIO do
+        Net.send s request
+        repeatUntilNothing (Net.recv s 1024) BS.putStr
+        S.gracefulClose s 1000
+
+-- Send mlformed requests -> response and log generated
+--   Extra space after method: sendSinisterRequest "localhost" "8000" [A.string|GET  /stream HTTP/1.1|] 
+--   No CRLF afterversion: sendSinisterRequest "localhost" "8000" badRequestString2
+badRequestString2 =
+    [A.string|GET /stream HTTP/1.1|] <>
     line [A.string|User-Agent: curl/7.64.1|] <>
     line [A.string|Accept-Language: en, mi|] <>
     line [A.string||]
---  Test with: > testHttpRequest "127.0.0.1" "8000" streamRequestString2
-
-
-
-
-
